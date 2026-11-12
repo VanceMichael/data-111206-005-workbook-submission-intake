@@ -1,29 +1,19 @@
-from pathlib import PurePosixPath
-from zipfile import ZipFile
-from xml.etree import ElementTree
+"""工作簿容器入口：校验 OOXML 并列出工作表关系。
 
-MAIN = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
-REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
+结构化采集的解析能力在 ``workbook_parser`` / ``collector`` 中实现，这里保留原有
+``inventory`` 接口，供只需要工作表清单与日期制的调用方使用。
+"""
+from workbook_parser import parse_workbook
 
 
 def inventory(path):
-    with ZipFile(path) as archive:
-        entries = archive.infolist()
-        if len({entry.filename for entry in entries}) != len(entries):
-            raise ValueError('容器出现重名成员')
-        if sum(entry.file_size for entry in entries) > 8 * 1024 * 1024:
-            raise ValueError('工作簿展开尺寸超限')
-        for entry in entries:
-            name = PurePosixPath(entry.filename)
-            if name.is_absolute() or '..' in name.parts or '\\' in entry.filename:
-                raise ValueError('容器路径不安全')
-        workbook = ElementTree.fromstring(archive.read('xl/workbook.xml'))
-        relationships = ElementTree.fromstring(archive.read('xl/_rels/workbook.xml.rels'))
-        links = {entry.attrib['Id']: entry.attrib for entry in relationships}
-        sheets = []
-        for sheet in workbook.findall(f'.//{{{MAIN}}}sheet'):
-            relation = links[sheet.attrib[f'{{{REL}}}id']]
-            sheets.append({'name': sheet.attrib['name'], 'relationship': relation['Id'],
-                           'target': relation['Target'], 'external': relation.get('TargetMode') == 'External'})
-        return {'sheets': sheets, 'members': len(entries),
-                'date1904': workbook.find(f'{{{MAIN}}}workbookPr').get('date1904', '0') == '1'}
+    workbook = parse_workbook(path)
+    return {
+        'sheets': [
+            {'name': sheet.name, 'relationship': sheet.rel_id,
+             'target': sheet.target, 'external': sheet.external}
+            for sheet in workbook.sheets
+        ],
+        'members': workbook.members,
+        'date1904': workbook.date1904,
+    }
